@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Cat Simulator 2015</title>
+    <style>
+        * { box-sizing: border-box; user-select: none; font-family: 'Impact', 'Arial Black', sans-serif; }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+        #canvas-container { width: 100%; height: 100%; }
+        
+        /* RETRO 2015 HUD UI */
+        .hud-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 20px; }
+        .top-bar { display: flex; justify-content: space-between; align-items: flex-start; }
+        .score-box { background: rgba(255, 105, 180, 0.85); border: 4px solid #fff; padding: 10px 20px; border-radius: 15px; color: #fff; font-size: 24px; text-shadow: 2px 2px #000; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
+        .timer-box { background: rgba(255, 215, 0, 0.9); border: 4px solid #fff; padding: 10px 20px; border-radius: 15px; color: #333; font-size: 24px; text-shadow: 1px 1px #fff; }
+        
+        /* CUSTOMIZE MENU */
+        #customize-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); display: flex; justify-content: center; align-items: flex-end; padding-bottom: 40px; pointer-events: auto; }
+        .menu-card { background: linear-gradient(135deg, #ff758c 0%, #ff7eb3 100%); border: 5px solid #fff; border-radius: 20px; padding: 20px; text-align: center; color: white; box-shadow: 0 10px 30px rgba(0,0,0,0.5); width: 320px; }
+        .btn { background: #fffa65; color: #333; border: 3px solid #fff; font-size: 20px; padding: 10px 20px; border-radius: 10px; cursor: pointer; text-transform: uppercase; margin: 5px; box-shadow: 0 4px #c7a700; }
+        .btn:active { transform: translateY(4px); box-shadow: 0 0 #c7a700; }
+
+        /* TOUCH CONTROLS (MOBILE HUD) */
+        .controls { display: flex; justify-content: space-between; align-items: flex-end; width: 100%; pointer-events: auto; }
+        .joystick-zone { width: 120px; height: 120px; background: rgba(255, 255, 255, 0.2); border: 3px solid rgba(255, 255, 255, 0.5); border-radius: 50%; position: relative; touch-action: none; }
+        .joystick-knob { width: 50px; height: 50px; background: rgba(255, 105, 180, 0.8); border: 2px solid #fff; border-radius: 50%; position: absolute; top: 35px; left: 35px; }
+        .action-btns { display: flex; gap: 15px; }
+        .action-btn { width: 75px; height: 75px; background: #ff4757; border: 4px solid #fff; border-radius: 50%; color: white; font-size: 16px; font-weight: bold; display: flex; justify-content: center; align-items: center; cursor: pointer; box-shadow: 0 4px rgba(0,0,0,0.3); }
+        .action-btn:active { transform: scale(0.95); }
+        .action-btn.paw { background: #ffa502; }
+
+        .hidden { display: none !important; }
+    </style>
+    <!-- Three.js Engine & Cannon Physics -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <!-- UI LAYER -->
+    <div class="hud-overlay">
+        <div class="top-bar">
+            <div class="score-box">SCORE: <span id="score">0</span></div>
+            <div class="timer-box id="timer-box">TIME: <span id="timer">60</span>s</div>
+        </div>
+
+        <!-- IN-GAME TOUCH CONTROLS -->
+        <div class="controls hidden" id="game-controls">
+            <div class="joystick-zone" id="joystick">
+                <div class="joystick-knob" id="knob"></div>
+            </div>
+            <div class="action-btns">
+                <div class="action-btn paw" onclick="swipePaw()">PAW!</div>
+                <div class="action-btn" onclick="catJump()">JUMP</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN / CUSTOMIZATION MENU -->
+    <div id="customize-screen">
+        <div class="menu-card">
+            <h1 style="margin: 0 0 10px 0; text-shadow: 2px 2px #ff4757;">CAT SIM 2015</h1>
+            <p style="font-family: sans-serif; font-weight: bold;">SELECT YOUR FELINE</p>
+            <button class="btn" onclick="cycleCatColor()">Change Color 🎨</button>
+            <br>
+            <button class="btn" style="background: #2ed573; color: white;" onclick="startGame()">START DESTRUCTION 🐾</button>
+        </div>
+    </div>
+
+    <script>
+        // --- GAME ENGINE SETUP ---
+        let scene, camera, renderer;
+        let catGroup, catBodyMesh, pawMesh;
+        let objectsToSmash = [];
+        let score = 0, timeLeft = 60, gameActive = false;
+        
+        // Cat Customization Options
+        const catColors = [0xFFA500, 0x333333, 0xFFFFFF, 0x8B4513]; // Orange, Black, White, Brown
+        let currentColorIdx = 0;
+
+        // Controls state
+        const keys = { w: false, a: false, s: false, d: false, space: false };
+        let moveInput = { x: 0, y: 0 };
+
+        function init() {
+            // 1. Scene & Camera Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xa0a0e0);
+            scene.fog = new THREE.Fog(0xa0a0e0, 10, 50);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 2. Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(10, 20, 10);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            // 3. Build Environment & Cat
+            buildRoom();
+            buildCat();
+
+            // Camera initial placement for customization
+            camera.position.set(0, 1.2, 2.5);
+            camera.lookAt(0, 0.5, 0);
+
+            // Event Listeners
+            window.addEventListener('resize', onWindowResize);
+            setupKeyboard();
+            setupJoystick();
+
+            animate();
+        }
+
+        // --- ENVIRONMENT GENERATOR (3D ROOM) ---
+        function buildRoom() {
+            // Floor (Wooden Parquet)
+            const floorGeo = new THREE.PlaneGeometry(20, 20);
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0xc28d53, roughness: 0.4 });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            // Walls
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0x82ccdd });
+            const backWall = new THREE.Mesh(new THREE.PlaneGeometry(20, 10), wallMat);
+            backWall.position.set(0, 5, -10);
+            scene.add(backWall);
+
+            // --- FURNITURE & DESTRUCTIBLE OBJECTS ---
+            // Main Dining Table
+            createTable(0, 0, -3);
+            
+            // Coffee Table
+            createTable(-4, 0, 2, 3, 1.2, 2);
+
+            // Vases / Cups on Table (Knockable items)
+            spawnSmashableItem(0, 2.1, -3, 0xeb4d4b, "Vase", 50);
+            spawnSmashableItem(0.8, 2.1, -2.5, 0x7ed6df, "Mug", 20);
+            spawnSmashableItem(-0.6, 2.1, -3.2, 0xf9ca24, "Statue", 100);
+            
+            // Low items on coffee table
+            spawnSmashableItem(-4, 1.3, 2, 0x6ab04c, "Plate", 30);
+            spawnSmashableItem(-3.5, 1.3, 2.2, 0xbe2edd, "Glass", 40);
+        }
+
+        function createTable(x, y, z, width = 4, height = 2, depth = 2.5) {
+            const tableMat = new THREE.MeshStandardMaterial({ color: 0x5e35b1 });
+            const top = new THREE.Mesh(new THREE.BoxGeometry(width, 0.2, depth), tableMat);
+            top.position.set(x, height, z);
+            top.castShadow = true;
+            top.receiveShadow = true;
+            scene.add(top);
+
+            // Legs
+            const legGeo = new THREE.BoxGeometry(0.2, height, 0.2);
+            const legOffsets = [
+                [-width/2 + 0.2, -depth/2 + 0.2],
+                [width/2 - 0.2, -depth/2 + 0.2],
+                [-width/2 + 0.2, depth/2 - 0.2],
+                [width/2 - 0.2, depth/2 - 0.2]
+            ];
+
+            legOffsets.forEach(off => {
+                const leg = new THREE.Mesh(legGeo, tableMat);
+                leg.position.set(x + off[0], height/2, z + off[1]);
+                leg.castShadow = true;
+                scene.add(leg);
+            });
+        }
+
+        function spawnSmashableItem(x, y, z, color, name, points) {
+            const geo = new THREE.CylinderGeometry(0.2, 0.15, 0.5, 12);
+            const mat = new THREE.MeshStandardMaterial({ color: color });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x, y, z);
+            mesh.castShadow = true;
+
+            // Simple Physics object state
+            mesh.userData = {
+                isDestructible: true,
+                points: points,
+                smashed: false,
+                velocityY: 0,
+                velocityX: 0,
+                velocityZ: 0,
+                originalY: y
+            };
+
+            scene.add(mesh);
+            objectsToSmash.push(mesh);
+        }
+
+        // --- 3D CAT CHARACTER BUILDER ---
+        function buildCat() {
+            catGroup = new THREE.Group();
+
+            // Body
+            const bodyGeo = new THREE.BoxGeometry(0.5, 0.4, 0.8);
+            catBodyMesh = new THREE.MeshStandardMaterial({ color: catColors[0] });
+            const body = new THREE.Mesh(bodyGeo, catBodyMesh);
+            body.position.y = 0.4;
+            body.castShadow = true;
+            catGroup.add(body);
+
+            // Head
+            const headGeo = new THREE.BoxGeometry(0.35, 0.35, 0.35);
+            const head = new THREE.Mesh(headGeo, catBodyMesh);
+            head.position.set(0, 0.65, 0.35);
+            catGroup.add(head);
+
+            // Ears
+            const earGeo = new THREE.ConeGeometry(0.08, 0.15, 4);
+            const earMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const ear1 = new THREE.Mesh(earGeo, earMat);
+            ear1.position.set(0.1, 0.85, 0.35);
+            const ear2 = ear1.clone();
+            ear2.position.x = -0.1;
+            catGroup.add(ear1);
+            catGroup.add(ear2);
+
+            // Paw (used for swiping animation)
+            const pawGeo = new THREE.BoxGeometry(0.12, 0.12, 0.25);
+            pawMesh = new THREE.Mesh(pawGeo, catBodyMesh);
+            pawMesh.position.set(0.2, 0.3, 0.4);
+            catGroup.add(pawMesh);
+
+            catGroup.position.set(0, 0, 0);
+            scene.add(catGroup);
+        }
+
+        function cycleCatColor() {
+            currentColorIdx = (currentColorIdx + 1) % catColors.length;
+            catBodyMesh.color.setHex(catColors[currentColorIdx]);
+        }
+
+        // --- GAMEPLAY CONTROLS & LOGIC ---
+        function startGame() {
+            document.getElementById('customize-screen').classList.add('hidden');
+            document.getElementById('game-controls').classList.remove('hidden');
+            gameActive = true;
+
+            // Start countdown timer
+            const timerInterval = setInterval(() => {
+                if (!gameActive) { clearInterval(timerInterval); return; }
+                timeLeft--;
+                document.getElementById('timer').innerText = timeLeft;
+                if (timeLeft <= 0) {
+                    gameActive = false;
+                    alert(`TIME'S UP! Final Destruction Score: ${score}`);
+                    location.reload();
+                }
+            }, 1000);
+        }
+
+        function catJump() {
+            if (!gameActive) return;
+            if (catGroup.position.y <= 0.05) {
+                catGroup.userData.velocityY = 0.15;
+            }
+        }
+
+        function swipePaw() {
+            if (!gameActive) return;
+            // Paw swipe animation
+            pawMesh.position.z += 0.3;
+            setTimeout(() => pawMesh.position.z -= 0.3, 150);
+
+            // Check if any destructible object is near
+            objectsToSmash.forEach(obj => {
+                if (obj.userData.smashed) return;
+                const dist = catGroup.position.distanceTo(obj.position);
+                if (dist < 1.5) {
+                    // Knock item down!
+                    obj.userData.smashed = true;
+                    obj.userData.velocityX = (obj.position.x - catGroup.position.x) * 0.1;
+                    obj.userData.velocityZ = (obj.position.z - catGroup.position.z) * 0.1;
+                    
+                    score += obj.userData.points;
+                    document.getElementById('score').innerText = score;
+                }
+            });
+        }
+
+        // Keyboard setup for PC Desktop play
+        function setupKeyboard() {
+            window.addEventListener('keydown', (e) => {
+                if (e.key === 'w' || e.key === 'ArrowUp') keys.w = true;
+                if (e.key === 's' || e.key === 'ArrowDown') keys.s = true;
+                if (e.key === 'a' || e.key === 'ArrowLeft') keys.a = true;
+                if (e.key === 'd' || e.key === 'ArrowRight') keys.d = true;
+                if (e.key === ' ') catJump();
+                if (e.key === 'f' || e.key === 'e') swipePaw();
+            });
+            window.addEventListener('keyup', (e) => {
+                if (e.key === 'w' || e.key === 'ArrowUp') keys.w = false;
+                if (e.key === 's' || e.key === 'ArrowDown') keys.s = false;
+                if (e.key === 'a' || e.key === 'ArrowLeft') keys.a = false;
+                if (e.key === 'd' || e.key === 'ArrowRight') keys.d = false;
+            });
+        }
+
+        // On-screen D-Pad Joystick Setup
+        function setupJoystick() {
+            const zone = document.getElementById('joystick');
+            const knob = document.getElementById('knob');
+            let active = false;
+
+            const handleMove = (e) => {
+                if (!active) return;
+                const touch = e.touches ? e.touches[0] : e;
+                const rect = zone.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+
+                let dx = touch.clientX - centerX;
+                let dy = touch.clientY - centerY;
+                const maxDist = 40;
+                const dist = Math.hypot(dx, dy);
+
+                if (dist > maxDist) {
+                    dx = (dx / dist) * maxDist;
+                    dy = (dy / dist) * maxDist;
+                }
+
+                knob.style.transform = `translate(${dx}px, ${dy}px)`;
+                moveInput.x = dx / maxDist;
+                moveInput.y = dy / maxDist;
+            };
+
+            zone.addEventListener('touchstart', () => active = true);
+            window.addEventListener('touchmove', handleMove);
+            window.addEventListener('touchend', () => {
+                active = false;
+                knob.style.transform = `translate(0px, 0px)`;
+                moveInput = { x: 0, y: 0 };
+            });
+        }
+
+        // --- MAIN LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (gameActive) {
+                // Movement calculations
+                let moveX = moveInput.x;
+                let moveZ = moveInput.y;
+
+                if (keys.w) moveZ = -1;
+                if (keys.s) moveZ = 1;
+                if (keys.a) moveX = -1;
+                if (keys.d) moveX = 1;
+
+                const speed = 0.08;
+                if (moveX !== 0 || moveZ !== 0) {
+                    catGroup.position.x += moveX * speed;
+                    catGroup.position.z += moveZ * speed;
+                    catGroup.rotation.y = Math.atan2(-moveX, -moveZ);
+                }
+
+                // Gravity and Jump physics
+                if (catGroup.userData.velocityY !== undefined) {
+                    catGroup.position.y += catGroup.userData.velocityY;
+                    catGroup.userData.velocityY -= 0.008; // Gravity
+
+                    if (catGroup.position.y <= 0) {
+                        catGroup.position.y = 0;
+                        catGroup.userData.velocityY = 0;
+                    }
+                }
+
+                // Smooth Follow Camera
+                camera.position.x = catGroup.position.x;
+                camera.position.y = catGroup.position.y + 1.8;
+                camera.position.z = catGroup.position.z + 3;
+                camera.lookAt(catGroup.position.x, catGroup.position.y + 0.4, catGroup.position.z);
+
+                // Update Object Falling Physics (Smashing)
+                objectsToSmash.forEach(obj => {
+                    if (obj.userData.smashed) {
+                        obj.position.x += obj.userData.velocityX;
+                        obj.position.z += obj.userData.velocityZ;
+                        obj.position.y -= 0.08; // Fall down
+
+                        if (obj.position.y <= 0.25) { // Hit floor
+                            obj.position.y = 0.25;
+                            obj.rotation.z = Math.PI / 2; // Lie flat smashed
+                        }
+                    }
+                });
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
